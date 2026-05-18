@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <meta name="description" content="Battle City - HTML5 Game Clone">
+    <title>Battle City - Multiplayer Game</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎮 BATTLE CITY</h1>
+            <div class="info">
+                <div class="stat">
+                    <span class="label">Score:</span>
+                    <span class="value" id="score">0</span>
+                </div>
+                <div class="stat">
+                    <span class="label">Level:</span>
+                    <span class="value" id="level">1</span>
+                </div>
+                <div class="stat">
+                    <span class="label">Lives:</span>
+                    <span class="value" id="lives">3</span>
+                </div>
+                <div class="stat">
+                    <span class="label">Enemies:</span>
+                    <span class="value" id="enemies">0</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="game-wrapper">
+            <canvas id="gameCanvas" width="600" height="600"></canvas>
+        </div>
+
+        <div class="controls">
+            <button class="btn btn-primary" id="startBtn" onclick="startGame()">Start Game</button>
+            <button class="btn btn-secondary" id="pauseBtn" onclick="togglePause()" disabled>Pause</button>
+            <button class="btn btn-secondary" onclick="resetGame()">Reset</button>
+        </div>
+
+        <div class="instructions">
+            <h3>📋 How to Play:</h3>
+            <p><strong>Desktop:</strong> Use Arrow Keys or WASD to move, Space to shoot</p>
+            <p><strong>Mobile:</strong> Tilt your device to move, Tap the screen to shoot</p>
+            <p><strong>Objective:</strong> Destroy all enemy tanks to advance to the next level</p>
+            <p><strong>Tips:</strong> Hide behind obstacles, collect power-ups, avoid enemy fire</p>
+        </div>
+    </div>
+
+    <script src="game.js"></script>
+</body>
+</html>
