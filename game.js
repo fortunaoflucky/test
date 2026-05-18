@@ -5,32 +5,31 @@ const CANVAS_WIDTH = CANVAS.width;
 const CANVAS_HEIGHT = CANVAS.height;
 const TILE_SIZE = 30;
 
+// Block Types
+const BLOCK_TYPES = {
+    EMPTY: 0,
+    WATER: 1,      // Голубые - проезжать нельзя, снаряды пролетают
+    BUSH: 2,       // Зелёные - можно прятаться, не ломаются
+    BRICK: 3,      // Коричневые - не проезжать, не пролетают, 3 выстрела
+    STEEL: 4       // Стальные - не ломаются, не проезжать, не пролетают
+};
+
+// Teams
+const TEAMS = {
+    ALLY: 'ally',
+    ENEMY: 'enemy'
+};
+
 // Game Variables
 let gameRunning = false;
 let gamePaused = false;
-let gameLevel = 1;
-let gameScore = 0;
-let playerLives = 3;
-let enemiesKilled = 0;
+let gameTime = 0;
+let mapChangeTimer = 0;
+const MAP_CHANGE_INTERVAL = 30000; // 30 секунд
 
-// Player Object
-const player = {
-    x: CANVAS_WIDTH / 2 - TILE_SIZE / 2,
-    y: CANVAS_HEIGHT - TILE_SIZE * 2,
-    width: TILE_SIZE,
-    height: TILE_SIZE,
-    speed: 3,
-    direction: 0, // 0: Up, 1: Right, 2: Down, 3: Left
-    bullets: [],
-    alive: true,
-    lastShot: 0
-};
-
-// Enemies Array
+let allies = [];
 let enemies = [];
-let enemyBullets = [];
-
-// Obstacles
+let allBullets = [];
 let obstacles = [];
 
 // Input Handling
@@ -58,13 +57,11 @@ CANVAS.addEventListener('touchend', () => {
 // Accelerometer Support
 if (window.DeviceOrientationEvent) {
     window.addEventListener('deviceorientation', (e) => {
-        accelerometerData.x = e.beta;  // -180 to 180
-        accelerometerData.y = e.gamma; // -90 to 90
-        accelerometerData.z = e.alpha; // 0 to 360
+        accelerometerData.x = e.beta;
+        accelerometerData.y = e.gamma;
     });
 }
 
-// Request Permission for iOS 13+
 function requestMotionPermission() {
     if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
         DeviceMotionEvent.requestPermission()
@@ -74,8 +71,6 @@ function requestMotionPermission() {
                 }
             })
             .catch(console.error);
-    } else {
-        window.addEventListener('deviceorientation', onDeviceOrientation);
     }
 }
 
@@ -84,362 +79,535 @@ function onDeviceOrientation(e) {
     accelerometerData.y = e.gamma;
 }
 
-// Enemy Class
-class Enemy {
-    constructor(x, y, level) {
+// Tank Class
+class Tank {
+    constructor(x, y, team, isPlayer = false) {
         this.x = x;
         this.y = y;
+        this.team = team;
+        this.isPlayer = isPlayer;
         this.width = TILE_SIZE;
         this.height = TILE_SIZE;
-        this.speed = 1.5 + level * 0.3;
-        this.direction = Math.floor(Math.random() * 4);
-        this.bullets = [];
+        this.speed = 2;
+        this.direction = 0; // 0: Up, 1: Right, 2: Down, 3: Left
         this.alive = true;
-        this.shootTimer = 0;
-        this.changeDirectionTimer = 0;
+        this.level = 1;
+        this.health = 1;
+        this.kills = 0;
+        this.damage = 0;
+        this.lastShot = 0;
+        this.shootCooldown = 300; // ms
+        this.deathTime = 0;
+        this.aiTimer = 0;
+        this.aiChangeDirection = 0;
+    }
+
+    getShootCooldown() {
+        // Уменьшаем cooldown с каждым уровнем (минимум 100ms)
+        return Math.max(100, this.shootCooldown - (this.level - 1) * 30);
+    }
+
+    getNumAngles() {
+        // Количество углов = level + 2 (circle = бесконечные углы)
+        return this.level + 2;
+    }
+
+    canMove(newX, newY) {
+        if (newX < 0 || newX + this.width > CANVAS_WIDTH ||
+            newY < 0 || newY + this.height > CANVAS_HEIGHT) {
+            return false;
+        }
+
+        // Проверка столкновения с препятствиями
+        for (let obs of obstacles) {
+            if (this.collidesWith(newX, newY, obs)) {
+                if (obs.type === BLOCK_TYPES.WATER || obs.type === BLOCK_TYPES.STEEL || obs.type === BLOCK_TYPES.BRICK) {
+                    return false;
+                }
+            }
+        }
+
+        // Проверка столкновения с другими танками
+        for (let tank of [...allies, ...enemies]) {
+            if (tank !== this && tank.alive) {
+                if (newX < tank.x + tank.width &&
+                    newX + this.width > tank.x &&
+                    newY < tank.y + tank.height &&
+                    newY + this.height > tank.y) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    collidesWith(x, y, obstacle) {
+        return x < obstacle.x + obstacle.width &&
+               x + this.width > obstacle.x &&
+               y < obstacle.y + obstacle.height &&
+               y + this.height > obstacle.y;
     }
 
     update() {
-        if (!this.alive) return;
-
-        // Change direction randomly
-        this.changeDirectionTimer--;
-        if (this.changeDirectionTimer <= 0) {
-            this.direction = Math.floor(Math.random() * 4);
-            this.changeDirectionTimer = Math.random() * 100 + 50;
+        if (!this.alive) {
+            if (Date.now() - this.deathTime > 5000) {
+                this.respawn();
+            }
+            return;
         }
 
-        // Move
-        let newX = this.x;
-        let newY = this.y;
-
-        switch (this.direction) {
-            case 0: newY -= this.speed; break; // Up
-            case 1: newX += this.speed; break; // Right
-            case 2: newY += this.speed; break; // Down
-            case 3: newX -= this.speed; break; // Left
+        // AI for non-player tanks
+        if (!this.isPlayer) {
+            this.updateAI();
         }
 
-        // Collision with walls
-        if (newX >= 0 && newX + this.width <= CANVAS_WIDTH &&
-            newY >= 0 && newY + this.height <= CANVAS_HEIGHT &&
-            !this.collidesWithObstacles(newX, newY)) {
+        // Movement
+        let moveX = 0;
+        let moveY = 0;
+        let newDirection = null;
+
+        if (this.isPlayer) {
+            // Player input
+            if (keys['ArrowUp'] || keys['w'] || keys['W']) {
+                moveY = -this.speed;
+                newDirection = 0;
+            }
+            if (keys['ArrowDown'] || keys['s'] || keys['S']) {
+                moveY = this.speed;
+                newDirection = 2;
+            }
+            if (keys['ArrowLeft'] || keys['a'] || keys['A']) {
+                moveX = -this.speed;
+                newDirection = 3;
+            }
+            if (keys['ArrowRight'] || keys['d'] || keys['D']) {
+                moveX = this.speed;
+                newDirection = 1;
+            }
+
+            if (Math.abs(accelerometerData.x) > 10) {
+                if (accelerometerData.x > 0) {
+                    moveY = this.speed;
+                    newDirection = 2;
+                } else {
+                    moveY = -this.speed;
+                    newDirection = 0;
+                }
+            }
+            if (Math.abs(accelerometerData.y) > 10) {
+                if (accelerometerData.y > 0) {
+                    moveX = this.speed;
+                    newDirection = 1;
+                } else {
+                    moveX = -this.speed;
+                    newDirection = 3;
+                }
+            }
+        } else {
+            // AI movement
+            switch (this.direction) {
+                case 0: moveY = -this.speed; break;
+                case 1: moveX = this.speed; break;
+                case 2: moveY = this.speed; break;
+                case 3: moveX = -this.speed; break;
+            }
+        }
+
+        if (newDirection !== null) {
+            this.direction = newDirection;
+        }
+
+        let newX = this.x + moveX;
+        let newY = this.y + moveY;
+
+        if (this.canMove(newX, newY)) {
             this.x = newX;
             this.y = newY;
-        } else {
+        } else if (!this.isPlayer) {
             this.direction = Math.floor(Math.random() * 4);
         }
 
-        // Shoot randomly
-        this.shootTimer++;
-        if (this.shootTimer > 100 + Math.random() * 100) {
+        // Shooting
+        if (this.isPlayer && (keys[' '] || touchActive)) {
             this.shoot();
-            this.shootTimer = 0;
+        } else if (!this.isPlayer) {
+            if (Math.random() < 0.01) {
+                this.shoot();
+            }
         }
+    }
 
-        // Update bullets
-        this.bullets = this.bullets.filter(b => {
-            b.x += b.vx;
-            b.y += b.vy;
-            return b.x >= 0 && b.x <= CANVAS_WIDTH && b.y >= 0 && b.y <= CANVAS_HEIGHT;
-        });
+    updateAI() {
+        this.aiTimer++;
+        this.aiChangeDirection++;
+
+        if (this.aiChangeDirection > 60 + Math.random() * 60) {
+            this.direction = Math.floor(Math.random() * 4);
+            this.aiChangeDirection = 0;
+        }
     }
 
     shoot() {
+        const now = Date.now();
+        if (now - this.lastShot < this.getShootCooldown()) {
+            return;
+        }
+
+        this.lastShot = now;
+
         const bullet = {
             x: this.x + this.width / 2,
             y: this.y + this.height / 2,
-            width: 5,
-            height: 5,
+            width: 4,
+            height: 4,
             speed: 5,
             vx: 0,
-            vy: 0
+            vy: 0,
+            owner: this
         };
 
         switch (this.direction) {
-            case 0: bullet.vy = -bullet.speed; break;
-            case 1: bullet.vx = bullet.speed; break;
-            case 2: bullet.vy = bullet.speed; break;
-            case 3: bullet.vx = -bullet.speed; break;
+            case 0:
+                bullet.vy = -bullet.speed;
+                bullet.y = this.y;
+                break;
+            case 1:
+                bullet.vx = bullet.speed;
+                bullet.x = this.x + this.width;
+                break;
+            case 2:
+                bullet.vy = bullet.speed;
+                bullet.y = this.y + this.height;
+                break;
+            case 3:
+                bullet.vx = -bullet.speed;
+                bullet.x = this.x;
+                break;
         }
 
-        this.bullets.push(bullet);
+        allBullets.push(bullet);
     }
 
-    collidesWithObstacles(x, y) {
-        for (let obs of obstacles) {
-            if (x < obs.x + obs.width &&
-                x + this.width > obs.x &&
-                y < obs.y + obs.height &&
-                y + this.height > obs.y) {
-                return true;
-            }
+    takeDamage() {
+        this.health--;
+        this.damage++;
+        this.level = Math.max(1, this.kills - Math.floor(this.damage / 2));
+
+        if (this.health <= 0) {
+            this.die();
         }
-        return false;
+    }
+
+    die() {
+        this.alive = false;
+        this.deathTime = Date.now();
+    }
+
+    respawn() {
+        this.alive = true;
+        this.health = 1;
+        this.x = Math.random() * (CANVAS_WIDTH - this.width);
+        this.y = Math.random() * (CANVAS_HEIGHT - this.height);
+        this.direction = Math.floor(Math.random() * 4);
+    }
+
+    addKill() {
+        this.kills++;
+        this.level = Math.max(1, this.kills - Math.floor(this.damage / 2));
+        this.health = 1;
     }
 
     draw() {
         if (!this.alive) return;
-        CTX.fillStyle = '#FF4444';
-        CTX.fillRect(this.x, this.y, this.width, this.height);
-        CTX.strokeStyle = '#FF0000';
-        CTX.lineWidth = 2;
-        CTX.strokeRect(this.x, this.y, this.width, this.height);
 
-        // Draw bullets
-        CTX.fillStyle = '#FFFF00';
-        for (let bullet of this.bullets) {
-            CTX.fillRect(bullet.x, bullet.y, bullet.width, bullet.height);
+        const cx = this.x + this.width / 2;
+        const cy = this.y + this.height / 2;
+        const numAngles = this.getNumAngles();
+
+        // Draw tank body (white)
+        if (this.team === TEAMS.ALLY) {
+            CTX.fillStyle = '#FFFFFF';
+            CTX.strokeStyle = '#00FF00'; // Green border for ally
+        } else {
+            CTX.fillStyle = '#FFFFFF';
+            CTX.strokeStyle = '#FF0000'; // Red border for enemy
+        }
+
+        // Draw polygon based on level
+        CTX.beginPath();
+        for (let i = 0; i < numAngles; i++) {
+            const angle = (i / numAngles) * Math.PI * 2 - Math.PI / 2;
+            const px = cx + Math.cos(angle) * (this.width / 2);
+            const py = cy + Math.sin(angle) * (this.height / 2);
+            if (i === 0) {
+                CTX.moveTo(px, py);
+            } else {
+                CTX.lineTo(px, py);
+            }
+        }
+        CTX.closePath();
+        CTX.fill();
+        CTX.lineWidth = 3;
+        CTX.stroke();
+
+        // Draw barrel/gun
+        CTX.strokeStyle = this.team === TEAMS.ALLY ? '#00FF00' : '#FF0000';
+        CTX.lineWidth = 3;
+        CTX.beginPath();
+
+        const barrelLength = this.width / 2 + 8;
+        let bx = cx;
+        let by = cy;
+        let bdx = 0;
+        let bdy = -1;
+
+        switch (this.direction) {
+            case 0:
+                bdy = -1;
+                break;
+            case 1:
+                bdx = 1;
+                bdy = 0;
+                break;
+            case 2:
+                bdy = 1;
+                break;
+            case 3:
+                bdx = -1;
+                bdy = 0;
+                break;
+        }
+
+        CTX.moveTo(bx, by);
+        CTX.lineTo(bx + bdx * barrelLength, by + bdy * barrelLength);
+        CTX.stroke();
+
+        // Draw level indicator
+        CTX.fillStyle = this.team === TEAMS.ALLY ? '#00FF00' : '#FF0000';
+        CTX.font = '12px Arial';
+        CTX.textAlign = 'center';
+        CTX.fillText(this.level, cx, cy + 4);
+    }
+}
+
+// Obstacle/Block class
+class Obstacle {
+    constructor(x, y, type) {
+        this.x = x;
+        this.y = y;
+        this.width = TILE_SIZE;
+        this.height = TILE_SIZE;
+        this.type = type;
+        this.health = type === BLOCK_TYPES.BRICK ? 3 : 1;
+    }
+
+    takeDamage() {
+        if (this.type === BLOCK_TYPES.BRICK) {
+            this.health--;
+        }
+    }
+
+    isDestructible() {
+        return this.type === BLOCK_TYPES.BRICK;
+    }
+
+    draw() {
+        switch (this.type) {
+            case BLOCK_TYPES.WATER:
+                CTX.fillStyle = '#0099FF';
+                break;
+            case BLOCK_TYPES.BUSH:
+                CTX.fillStyle = '#00AA00';
+                break;
+            case BLOCK_TYPES.BRICK:
+                CTX.fillStyle = '#996633';
+                break;
+            case BLOCK_TYPES.STEEL:
+                CTX.fillStyle = '#888888';
+                break;
+            default:
+                return;
+        }
+
+        CTX.fillRect(this.x, this.y, this.width, this.height);
+
+        // Draw health for bricks
+        if (this.type === BLOCK_TYPES.BRICK) {
+            CTX.strokeStyle = '#663300';
+            CTX.lineWidth = 1;
+            CTX.strokeRect(this.x, this.y, this.width, this.height);
         }
     }
 }
 
-// Initialize Game
-function initGame() {
-    enemies = [];
+// Generate map
+function generateMap() {
     obstacles = [];
-    player.bullets = [];
-    enemyBullets = [];
-    player.alive = true;
-    player.x = CANVAS_WIDTH / 2 - TILE_SIZE / 2;
-    player.y = CANVAS_HEIGHT - TILE_SIZE * 2;
-    player.direction = 0; // Default to up
+    const gridW = Math.floor(CANVAS_WIDTH / TILE_SIZE);
+    const gridH = Math.floor(CANVAS_HEIGHT / TILE_SIZE);
 
-    // Create obstacles
-    createObstacles();
-
-    // Create enemies
-    const enemyCount = 3 + gameLevel;
-    for (let i = 0; i < enemyCount; i++) {
-        let x, y, valid;
-        do {
-            valid = true;
-            x = Math.random() * (CANVAS_WIDTH - TILE_SIZE);
-            y = Math.random() * (CANVAS_HEIGHT / 2);
-
-            // Check if too close to player
-            if (Math.abs(x - player.x) < 100 && Math.abs(y - player.y) < 100) {
-                valid = false;
+    // Water regions (connected)
+    const waterRegions = [];
+    for (let r = 0; r < 2; r++) {
+        const startX = Math.floor(Math.random() * (gridW - 5));
+        const startY = Math.floor(Math.random() * (gridH - 5));
+        
+        for (let i = startX; i < startX + 4; i++) {
+            for (let j = startY; j < startY + 4; j++) {
+                if (i >= 0 && i < gridW && j >= 0 && j < gridH) {
+                    obstacles.push(new Obstacle(i * TILE_SIZE, j * TILE_SIZE, BLOCK_TYPES.WATER));
+                }
             }
-        } while (!valid);
+        }
+    }
 
-        enemies.push(new Enemy(x, y, gameLevel));
+    // Bushes
+    for (let i = 0; i < 30; i++) {
+        const x = Math.floor(Math.random() * (gridW - 1)) * TILE_SIZE;
+        const y = Math.floor(Math.random() * (gridH - 1)) * TILE_SIZE;
+        if (!obstacles.some(obs => obs.x === x && obs.y === y)) {
+            obstacles.push(new Obstacle(x, y, BLOCK_TYPES.BUSH));
+        }
+    }
+
+    // Bricks
+    for (let i = 0; i < 40; i++) {
+        const x = Math.floor(Math.random() * (gridW - 1)) * TILE_SIZE;
+        const y = Math.floor(Math.random() * (gridH - 1)) * TILE_SIZE;
+        if (!obstacles.some(obs => obs.x === x && obs.y === y)) {
+            obstacles.push(new Obstacle(x, y, BLOCK_TYPES.BRICK));
+        }
+    }
+
+    // Steel walls (borders)
+    for (let i = 0; i < gridW; i++) {
+        obstacles.push(new Obstacle(i * TILE_SIZE, 0, BLOCK_TYPES.STEEL));
+        obstacles.push(new Obstacle(i * TILE_SIZE, (gridH - 1) * TILE_SIZE, BLOCK_TYPES.STEEL));
+    }
+    for (let j = 1; j < gridH - 1; j++) {
+        obstacles.push(new Obstacle(0, j * TILE_SIZE, BLOCK_TYPES.STEEL));
+        obstacles.push(new Obstacle((gridW - 1) * TILE_SIZE, j * TILE_SIZE, BLOCK_TYPES.STEEL));
+    }
+}
+
+// Initialize game
+function initGame() {
+    allies = [];
+    enemies = [];
+    allBullets = [];
+    generateMap();
+
+    // Player tank
+    const player = new Tank(CANVAS_WIDTH / 4, CANVAS_HEIGHT / 2, TEAMS.ALLY, true);
+    allies.push(player);
+
+    // Ally bots
+    for (let i = 0; i < 2; i++) {
+        const x = CANVAS_WIDTH / 4 + Math.random() * 100;
+        const y = CANVAS_HEIGHT / 2 + Math.random() * 100;
+        allies.push(new Tank(x, y, TEAMS.ALLY, false));
+    }
+
+    // Enemy bots
+    for (let i = 0; i < 3; i++) {
+        const x = (3 * CANVAS_WIDTH) / 4 + Math.random() * 100;
+        const y = CANVAS_HEIGHT / 2 + Math.random() * 100;
+        enemies.push(new Tank(x, y, TEAMS.ENEMY, false));
     }
 
     updateUI();
 }
 
-function createObstacles() {
-    const gridW = CANVAS_WIDTH / TILE_SIZE;
-    const gridH = CANVAS_HEIGHT / TILE_SIZE;
+// Update game
+function update() {
+    if (!gameRunning || gamePaused) return;
 
-    for (let i = 0; i < 20; i++) {
-        let x = Math.floor(Math.random() * (gridW - 2) + 1) * TILE_SIZE;
-        let y = Math.floor(Math.random() * (gridH - 3)) * TILE_SIZE;
+    gameTime += 16; // ~60 FPS
+    mapChangeTimer += 16;
 
-        if (Math.abs(x - player.x) > 150 || Math.abs(y - player.y) > 150) {
-            obstacles.push({
-                x: x,
-                y: y,
-                width: TILE_SIZE,
-                height: TILE_SIZE,
-                health: 2
-            });
-        }
-    }
-}
-
-// Update Player Movement
-function updatePlayer() {
-    if (!player.alive) return;
-
-    let moveX = 0;
-    let moveY = 0;
-    let newDirection = null;
-
-    // Keyboard input
-    if (keys['ArrowUp'] || keys['w'] || keys['W']) {
-        moveY = -player.speed;
-        newDirection = 0; // Up
-    }
-    if (keys['ArrowDown'] || keys['s'] || keys['S']) {
-        moveY = player.speed;
-        newDirection = 2; // Down
-    }
-    if (keys['ArrowLeft'] || keys['a'] || keys['A']) {
-        moveX = -player.speed;
-        newDirection = 3; // Left
-    }
-    if (keys['ArrowRight'] || keys['d'] || keys['D']) {
-        moveX = player.speed;
-        newDirection = 1; // Right
+    // Change map every 30 seconds
+    if (mapChangeTimer > MAP_CHANGE_INTERVAL) {
+        generateMap();
+        mapChangeTimer = 0;
     }
 
-    // Mobile accelerometer input
-    if (Math.abs(accelerometerData.x) > 10) {
-        if (accelerometerData.x > 0) {
-            moveY = player.speed;
-            newDirection = 2; // Down
-        } else {
-            moveY = -player.speed;
-            newDirection = 0; // Up
-        }
-    }
-    if (Math.abs(accelerometerData.y) > 10) {
-        if (accelerometerData.y > 0) {
-            moveX = player.speed;
-            newDirection = 1; // Right
-        } else {
-            moveX = -player.speed;
-            newDirection = 3; // Left
-        }
-    }
-
-    // Update direction if moving
-    if (newDirection !== null) {
-        player.direction = newDirection;
-    }
-
-    // Apply movement
-    let newX = player.x + moveX;
-    let newY = player.y + moveY;
-
-    // Boundary collision
-    if (newX >= 0 && newX + player.width <= CANVAS_WIDTH) {
-        player.x = newX;
-    }
-    if (newY >= 0 && newY + player.height <= CANVAS_HEIGHT) {
-        player.y = newY;
-    }
-
-    // Obstacle collision
-    for (let obs of obstacles) {
-        if (player.x < obs.x + obs.width &&
-            player.x + player.width > obs.x &&
-            player.y < obs.y + obs.height &&
-            player.y + player.height > obs.y) {
-            player.x -= moveX;
-            player.y -= moveY;
-        }
-    }
-
-    // Shooting
-    if (keys[' '] || touchActive) {
-        player.shoot();
+    // Update all tanks
+    for (let tank of [...allies, ...enemies]) {
+        tank.update();
     }
 
     // Update bullets
-    player.bullets = player.bullets.filter(b => {
-        b.x += b.vx;
-        b.y += b.vy;
-        return b.x >= 0 && b.x <= CANVAS_WIDTH && b.y >= 0 && b.y <= CANVAS_HEIGHT;
-    });
-}
+    for (let i = allBullets.length - 1; i >= 0; i--) {
+        const bullet = allBullets[i];
+        bullet.x += bullet.vx;
+        bullet.y += bullet.vy;
 
-// Player Shoot
-player.shoot = function() {
-    const now = Date.now();
-    if (this.bullets.length < 3 && now - this.lastShot > 100) {
-        const bullet = {
-            x: this.x + this.width / 2,
-            y: this.y + this.height / 2,
-            width: 4,
-            height: 10,
-            speed: 6,
-            vx: 0,
-            vy: 0
-        };
-
-        // Shoot in the direction the tank is facing
-        switch (this.direction) {
-            case 0: // Up
-                bullet.vy = -bullet.speed;
-                bullet.y = this.y;
-                break;
-            case 1: // Right
-                bullet.vx = bullet.speed;
-                bullet.x = this.x + this.width;
-                bullet.width = 10;
-                bullet.height = 4;
-                break;
-            case 2: // Down
-                bullet.vy = bullet.speed;
-                bullet.y = this.y + this.height;
-                break;
-            case 3: // Left
-                bullet.vx = -bullet.speed;
-                bullet.x = this.x;
-                bullet.width = 10;
-                bullet.height = 4;
-                break;
+        // Check if bullet is out of bounds
+        if (bullet.x < 0 || bullet.x > CANVAS_WIDTH || 
+            bullet.y < 0 || bullet.y > CANVAS_HEIGHT) {
+            allBullets.splice(i, 1);
+            continue;
         }
 
-        this.bullets.push(bullet);
-        this.lastShot = now;
-    }
-};
-
-// Collision Detection
-function checkCollisions() {
-    // Player bullets vs enemies
-    for (let i = player.bullets.length - 1; i >= 0; i--) {
-        for (let j = enemies.length - 1; j >= 0; j--) {
-            if (enemies[j].alive && checkRectCollision(
-                player.bullets[i].x, player.bullets[i].y, 
-                player.bullets[i].width, player.bullets[i].height,
-                enemies[j].x, enemies[j].y, 
-                enemies[j].width, enemies[j].height)) {
-                
-                player.bullets.splice(i, 1);
-                enemies[j].alive = false;
-                gameScore += 100;
-                enemiesKilled++;
-                break;
-            }
-        }
-    }
-
-    // Enemy bullets vs player
-    for (let i = 0; i < enemies.length; i++) {
-        for (let j = 0; j < enemies[i].bullets.length; j++) {
-            if (checkRectCollision(
-                enemies[i].bullets[j].x, enemies[i].bullets[j].y,
-                enemies[i].bullets[j].width, enemies[i].bullets[j].height,
-                player.x, player.y,
-                player.width, player.height)) {
-                
-                player.alive = false;
-                playerLives--;
-                break;
-            }
-        }
-    }
-
-    // Bullets vs obstacles
-    for (let bullet of player.bullets) {
+        // Check collision with obstacles
+        let hitObstacle = false;
         for (let obs of obstacles) {
-            if (checkRectCollision(bullet.x, bullet.y, bullet.width, bullet.height,
-                obs.x, obs.y, obs.width, obs.height)) {
-                obs.health--;
+            if (bullet.x < obs.x + obs.width &&
+                bullet.x + bullet.width > obs.x &&
+                bullet.y < obs.y + obs.height &&
+                bullet.y + bullet.height > obs.y) {
+
+                // Water and bush let bullets through
+                if (obs.type === BLOCK_TYPES.WATER || obs.type === BLOCK_TYPES.BUSH) {
+                    continue;
+                }
+
+                // Brick and steel blocks bullets
+                if (obs.type === BLOCK_TYPES.BRICK || obs.type === BLOCK_TYPES.STEEL) {
+                    if (obs.isDestructible()) {
+                        obs.takeDamage();
+                        if (obs.health <= 0) {
+                            obstacles.splice(obstacles.indexOf(obs), 1);
+                        }
+                    }
+                    allBullets.splice(i, 1);
+                    hitObstacle = true;
+                    break;
+                }
+            }
+        }
+
+        if (hitObstacle) continue;
+
+        // Check collision with tanks
+        const targetTeam = bullet.owner.team === TEAMS.ALLY ? enemies : allies;
+        for (let tank of targetTeam) {
+            if (tank.alive &&
+                bullet.x < tank.x + tank.width &&
+                bullet.x + bullet.width > tank.x &&
+                bullet.y < tank.y + tank.height &&
+                bullet.y + bullet.height > tank.y) {
+
+                tank.takeDamage();
+                bullet.owner.addKill();
+                allBullets.splice(i, 1);
+                break;
             }
         }
     }
 
-    obstacles = obstacles.filter(obs => obs.health > 0);
+    updateUI();
 }
 
-function checkRectCollision(x1, y1, w1, h1, x2, y2, w2, h2) {
-    return x1 < x2 + w2 && x1 + w1 > x2 && y1 < y2 + h2 && y1 + h1 > y2;
-}
-
-// Draw Game
+// Draw game
 function draw() {
     // Clear canvas
-    CTX.fillStyle = '#222';
+    CTX.fillStyle = '#111';
     CTX.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
 
     // Draw grid
-    CTX.strokeStyle = '#444';
+    CTX.strokeStyle = '#333';
     CTX.lineWidth = 0.5;
     for (let i = 0; i <= CANVAS_WIDTH; i += TILE_SIZE) {
         CTX.beginPath();
@@ -455,99 +623,31 @@ function draw() {
     }
 
     // Draw obstacles
-    CTX.fillStyle = '#888';
     for (let obs of obstacles) {
-        CTX.fillRect(obs.x, obs.y, obs.width, obs.height);
-        CTX.strokeStyle = '#666';
-        CTX.lineWidth = 1;
-        CTX.strokeRect(obs.x, obs.y, obs.width, obs.height);
+        obs.draw();
     }
 
-    // Draw player
-    if (player.alive) {
-        CTX.fillStyle = '#00FF00';
-        CTX.fillRect(player.x, player.y, player.width, player.height);
-        CTX.strokeStyle = '#00AA00';
-        CTX.lineWidth = 2;
-        CTX.strokeRect(player.x, player.y, player.width, player.height);
-
-        // Draw direction indicator
-        CTX.fillStyle = '#00AA00';
-        const cx = player.x + player.width / 2;
-        const cy = player.y + player.height / 2;
-        const indicatorLength = 10;
-        
-        switch (player.direction) {
-            case 0: // Up
-                CTX.fillRect(cx - 2, player.y - 5, 4, 5);
-                break;
-            case 1: // Right
-                CTX.fillRect(player.x + player.width, cy - 2, 5, 4);
-                break;
-            case 2: // Down
-                CTX.fillRect(cx - 2, player.y + player.height, 4, 5);
-                break;
-            case 3: // Left
-                CTX.fillRect(player.x - 5, cy - 2, 5, 4);
-                break;
-        }
-
-        // Draw bullets
-        CTX.fillStyle = '#00FF00';
-        for (let bullet of player.bullets) {
-            CTX.fillRect(bullet.x, bullet.y, bullet.width, bullet.height);
-        }
+    // Draw bullets
+    for (let bullet of allBullets) {
+        CTX.fillStyle = '#FFFF00';
+        CTX.fillRect(bullet.x - bullet.width / 2, bullet.y - bullet.height / 2, 
+                     bullet.width, bullet.height);
     }
 
-    // Draw enemies
-    for (let enemy of enemies) {
-        enemy.draw();
+    // Draw tanks
+    for (let tank of [...allies, ...enemies]) {
+        tank.draw();
     }
 }
 
-// Update Game State
-function update() {
-    if (!gameRunning || gamePaused) return;
-
-    if (!player.alive) {
-        if (playerLives > 0) {
-            setTimeout(() => {
-                player.alive = true;
-                player.x = CANVAS_WIDTH / 2 - TILE_SIZE / 2;
-                player.y = CANVAS_HEIGHT - TILE_SIZE * 2;
-            }, 1000);
-        } else {
-            endGame();
-            return;
-        }
-    }
-
-    updatePlayer();
-
-    for (let enemy of enemies) {
-        enemy.update();
-    }
-
-    checkCollisions();
-
-    // Level complete
-    if (enemies.every(e => !e.alive)) {
-        gameLevel++;
-        gameScore += 1000;
-        initGame();
-    }
-
-    updateUI();
-}
-
-// Game Loop
+// Game loop
 function gameLoop() {
     update();
     draw();
     requestAnimationFrame(gameLoop);
 }
 
-// Start Game
+// Start game
 function startGame() {
     if (!gameRunning) {
         gameRunning = true;
@@ -558,7 +658,7 @@ function startGame() {
     }
 }
 
-// Toggle Pause
+// Toggle pause
 function togglePause() {
     if (gameRunning) {
         gamePaused = !gamePaused;
@@ -566,16 +666,10 @@ function togglePause() {
     }
 }
 
-// Reset Game
+// Reset game
 function resetGame() {
     gameRunning = false;
     gamePaused = false;
-    gameLevel = 1;
-    gameScore = 0;
-    playerLives = 3;
-    enemiesKilled = 0;
-    player.alive = true;
-    player.bullets = [];
     document.getElementById('startBtn').disabled = false;
     document.getElementById('pauseBtn').disabled = true;
     document.getElementById('pauseBtn').textContent = 'Pause';
@@ -583,19 +677,20 @@ function resetGame() {
     draw();
 }
 
-// End Game
-function endGame() {
-    gameRunning = false;
-    alert(`Game Over! Final Score: ${gameScore}\nLevel: ${gameLevel}\nEnemies Destroyed: ${enemiesKilled}`);
-    resetGame();
-}
-
 // Update UI
 function updateUI() {
-    document.getElementById('score').textContent = gameScore;
-    document.getElementById('level').textContent = gameLevel;
-    document.getElementById('lives').textContent = playerLives;
-    document.getElementById('enemies').textContent = enemies.filter(e => e.alive).length;
+    const allyPlayer = allies.find(t => t.isPlayer);
+    if (allyPlayer) {
+        document.getElementById('playerLevel').textContent = allyPlayer.level;
+        document.getElementById('playerKills').textContent = allyPlayer.kills;
+        document.getElementById('playerDamage').textContent = allyPlayer.damage;
+    }
+
+    const allyScore = allies.reduce((sum, t) => sum + t.kills, 0);
+    const enemyScore = enemies.reduce((sum, t) => sum + t.kills, 0);
+    
+    document.getElementById('allyTeam').textContent = `Allies: ${allyScore}`;
+    document.getElementById('enemyTeam').textContent = `Enemies: ${enemyScore}`;
 }
 
 // Initialize
