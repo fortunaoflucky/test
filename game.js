@@ -20,12 +20,10 @@ const player = {
     width: TILE_SIZE,
     height: TILE_SIZE,
     speed: 3,
-    direction: null,
-    nextDirection: null,
+    direction: 0, // 0: Up, 1: Right, 2: Down, 3: Left
     bullets: [],
     alive: true,
-    vx: 0,
-    vy: 0
+    lastShot: 0
 };
 
 // Enemies Array
@@ -205,6 +203,7 @@ function initGame() {
     player.alive = true;
     player.x = CANVAS_WIDTH / 2 - TILE_SIZE / 2;
     player.y = CANVAS_HEIGHT - TILE_SIZE * 2;
+    player.direction = 0; // Default to up
 
     // Create obstacles
     createObstacles();
@@ -256,19 +255,49 @@ function updatePlayer() {
 
     let moveX = 0;
     let moveY = 0;
+    let newDirection = null;
 
     // Keyboard input
-    if (keys['ArrowUp'] || keys['w'] || keys['W']) moveY = -player.speed;
-    if (keys['ArrowDown'] || keys['s'] || keys['S']) moveY = player.speed;
-    if (keys['ArrowLeft'] || keys['a'] || keys['A']) moveX = -player.speed;
-    if (keys['ArrowRight'] || keys['d'] || keys['D']) moveX = player.speed;
+    if (keys['ArrowUp'] || keys['w'] || keys['W']) {
+        moveY = -player.speed;
+        newDirection = 0; // Up
+    }
+    if (keys['ArrowDown'] || keys['s'] || keys['S']) {
+        moveY = player.speed;
+        newDirection = 2; // Down
+    }
+    if (keys['ArrowLeft'] || keys['a'] || keys['A']) {
+        moveX = -player.speed;
+        newDirection = 3; // Left
+    }
+    if (keys['ArrowRight'] || keys['d'] || keys['D']) {
+        moveX = player.speed;
+        newDirection = 1; // Right
+    }
 
     // Mobile accelerometer input
     if (Math.abs(accelerometerData.x) > 10) {
-        moveY = accelerometerData.x > 0 ? player.speed : -player.speed;
+        if (accelerometerData.x > 0) {
+            moveY = player.speed;
+            newDirection = 2; // Down
+        } else {
+            moveY = -player.speed;
+            newDirection = 0; // Up
+        }
     }
     if (Math.abs(accelerometerData.y) > 10) {
-        moveX = accelerometerData.y > 0 ? player.speed : -player.speed;
+        if (accelerometerData.y > 0) {
+            moveX = player.speed;
+            newDirection = 1; // Right
+        } else {
+            moveX = -player.speed;
+            newDirection = 3; // Left
+        }
+    }
+
+    // Update direction if moving
+    if (newDirection !== null) {
+        player.direction = newDirection;
     }
 
     // Apply movement
@@ -309,19 +338,44 @@ function updatePlayer() {
 
 // Player Shoot
 player.shoot = function() {
-    if (this.bullets.length < 3 && !this.lastShot) {
+    const now = Date.now();
+    if (this.bullets.length < 3 && now - this.lastShot > 100) {
         const bullet = {
             x: this.x + this.width / 2,
-            y: this.y,
+            y: this.y + this.height / 2,
             width: 4,
             height: 10,
             speed: 6,
             vx: 0,
-            vy: -6
+            vy: 0
         };
+
+        // Shoot in the direction the tank is facing
+        switch (this.direction) {
+            case 0: // Up
+                bullet.vy = -bullet.speed;
+                bullet.y = this.y;
+                break;
+            case 1: // Right
+                bullet.vx = bullet.speed;
+                bullet.x = this.x + this.width;
+                bullet.width = 10;
+                bullet.height = 4;
+                break;
+            case 2: // Down
+                bullet.vy = bullet.speed;
+                bullet.y = this.y + this.height;
+                break;
+            case 3: // Left
+                bullet.vx = -bullet.speed;
+                bullet.x = this.x;
+                bullet.width = 10;
+                bullet.height = 4;
+                break;
+        }
+
         this.bullets.push(bullet);
-        this.lastShot = true;
-        setTimeout(() => { this.lastShot = false; }, 100);
+        this.lastShot = now;
     }
 };
 
@@ -416,6 +470,27 @@ function draw() {
         CTX.strokeStyle = '#00AA00';
         CTX.lineWidth = 2;
         CTX.strokeRect(player.x, player.y, player.width, player.height);
+
+        // Draw direction indicator
+        CTX.fillStyle = '#00AA00';
+        const cx = player.x + player.width / 2;
+        const cy = player.y + player.height / 2;
+        const indicatorLength = 10;
+        
+        switch (player.direction) {
+            case 0: // Up
+                CTX.fillRect(cx - 2, player.y - 5, 4, 5);
+                break;
+            case 1: // Right
+                CTX.fillRect(player.x + player.width, cy - 2, 5, 4);
+                break;
+            case 2: // Down
+                CTX.fillRect(cx - 2, player.y + player.height, 4, 5);
+                break;
+            case 3: // Left
+                CTX.fillRect(player.x - 5, cy - 2, 5, 4);
+                break;
+        }
 
         // Draw bullets
         CTX.fillStyle = '#00FF00';
