@@ -3,30 +3,36 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <meta name="description" content="Battle City - HTML5 Game Clone">
-    <title>Battle City - Multiplayer Game</title>
+    <meta name="description" content="Battle City - Advanced Tank Game">
+    <title>Battle City - Team Battle</title>
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
     <div class="container">
         <div class="header">
-            <h1>🎮 BATTLE CITY</h1>
-            <div class="info">
-                <div class="stat">
-                    <span class="label">Score:</span>
-                    <span class="value" id="score">0</span>
+            <h1>🎮 BATTLE CITY - TEAM WARFARE</h1>
+            
+            <div class="teams-info">
+                <div class="team-box ally">
+                    <h3 id="allyTeam">Allies: 0</h3>
+                    <div class="player-stats">
+                        <div class="stat">
+                            <span class="label">Your Level:</span>
+                            <span class="value" id="playerLevel">1</span>
+                        </div>
+                        <div class="stat">
+                            <span class="label">Kills:</span>
+                            <span class="value" id="playerKills">0</span>
+                        </div>
+                        <div class="stat">
+                            <span class="label">Damage:</span>
+                            <span class="value" id="playerDamage">0</span>
+                        </div>
+                    </div>
                 </div>
-                <div class="stat">
-                    <span class="label">Level:</span>
-                    <span class="value" id="level">1</span>
-                </div>
-                <div class="stat">
-                    <span class="label">Lives:</span>
-                    <span class="value" id="lives">3</span>
-                </div>
-                <div class="stat">
-                    <span class="label">Enemies:</span>
-                    <span class="value" id="enemies">0</span>
+
+                <div class="team-box enemy">
+                    <h3 id="enemyTeam">Enemies: 0</h3>
                 </div>
             </div>
         </div>
@@ -42,11 +48,27 @@
         </div>
 
         <div class="instructions">
-            <h3>📋 How to Play:</h3>
-            <p><strong>Desktop:</strong> Use Arrow Keys or WASD to move, Space to shoot</p>
-            <p><strong>Mobile:</strong> Tilt your device to move, Tap the screen to shoot</p>
-            <p><strong>Objective:</strong> Destroy all enemy tanks to advance to the next level</p>
-            <p><strong>Tips:</strong> Hide behind obstacles, collect power-ups, avoid enemy fire</p>
+            <h3>📋 Game Guide:</h3>
+            <div class="columns">
+                <div>
+                    <h4>Controls:</h4>
+                    <p><strong>Desktop:</strong> Arrows/WASD to move, Space to shoot</p>
+                    <p><strong>Mobile:</strong> Tilt device to move, Tap to shoot</p>
+                </div>
+                <div>
+                    <h4>Block Types:</h4>
+                    <p>🔵 <strong>Water:</strong> No passage, bullets pass through</p>
+                    <p>🟢 <strong>Bush:</strong> Hide tanks, bullets pass through</p>
+                    <p>🟤 <strong>Brick:</strong> 3 hits to destroy</p>
+                </div>
+                <div>
+                    <h4>Tank Levels:</h4>
+                    <p>Tank shape changes with level (more angles)</p>
+                    <p>Higher level = more health & faster fire</p>
+                    <p>Kills increase level, damage decreases it</p>
+                </div>
+            </div>
+            <p><strong>🎯 Objective:</strong> Work with your team to destroy enemy tanks. Maps change every 30 seconds. Tank respawns in 5 seconds after death.</p>
         </div>
     </div>
 
